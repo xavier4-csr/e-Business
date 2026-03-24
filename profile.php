@@ -1,229 +1,315 @@
 <?php
-// Session hardening + auth guard
-ini_set('session.cookie_httponly', 1);
-ini_set('session.use_strict_mode', 1);
-if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
-    ini_set('session.cookie_secure', 1);
-}
-ini_set('session.cookie_samesite', 'Strict');
+/**
+ * User Profile & Account Settings Page
+ * Displays and manages user account information
+ * Includes: personal details, photo upload, and account settings
+ * Company listings moved to dashboard.php for better separation of concerns
+ */
 
+// Initialize session for user authentication
 session_start();
+
+// Include database connection module
 include "connectdb.php";
 
-if (!isset($_SESSION['email'])) {
-    header("location:login.php");
-    exit();
-}
+// Include authentication helper functions (require_login, logout_user, etc.)
+include "includes/auth.php";
 
-// Fix #1: Prepared statement for fetching owner
-$stmt = $connect->prepare("SELECT * FROM bus_owner WHERE email = ?");
-$stmt->bind_param("s", $_SESSION['email']);
+// Verify user is logged in, otherwise redirect to login page
+require_login();
+
+// Include HTML header with meta tags, styles, and CSRF token generation
+include "includes/header.php";
+
+// Set page title for browser tab
+$page_title = "Profile Settings - RegE";
+
+// Get current user ID from session
+$user_id = get_current_user_id();
+
+// Prepare database query to fetch current user's full information
+$stmt = $connect->prepare(
+    "SELECT owner_id, first_name, last_name, email, phone_no, profile_picture_url 
+     FROM bus_owner 
+     WHERE owner_id = ?"
+);
+
+// Bind the user ID parameter as integer type for security
+$stmt->bind_param("i", $user_id);
+
+// Execute the prepared statement against the database
 $stmt->execute();
+
+// Retrieve the result set from the query
 $result = $stmt->get_result();
 
+// Check if user record was found in database
 if ($result && $result->num_rows > 0) {
-    $bus_owner           = $result->fetch_assoc();
-    $owner_id            = $bus_owner['owner_id'];
-    $first_name          = $bus_owner['first_name'];
-    $email               = $bus_owner['email'];
-    $phone_no            = $bus_owner['phone_no'];
-    $profile_picture_url = $bus_owner['profile_picture_url'];
+    // Fetch the user's data as an associative array
+    $user_data = $result->fetch_assoc();
+    
+    // Extract individual user fields for template display
+    $owner_id = $user_data['owner_id'];
+    $first_name = $user_data['first_name'];
+    $last_name = $user_data['last_name'];
+    $email = $user_data['email'];
+    $phone_no = $user_data['phone_no'];
+    $profile_picture_url = $user_data['profile_picture_url'];
 } else {
+    // User not found, redirect to home page as fallback
     header("location:Home.php");
     exit();
 }
+
+// Close prepared statement to free database resources
 $stmt->close();
 
-// Handle profile photo upload
+// Initialize success and error message variables
+$success_message = '';
+$error_message = '';
+
+
+// Handle profile photo upload POST request
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['fileInput'])
     && $_FILES['fileInput']['error'] == UPLOAD_ERR_OK) {
 
-    // Fix #5: Verify CSRF on photo upload too
+    // Verify CSRF token to prevent cross-site request forgery attacks
     if (!isset($_POST['csrf']) || !hash_equals($_SESSION['csrf'], $_POST['csrf'])) {
-        die("Invalid CSRF token.");
+        // Invalid CSRF token, terminate request
+        die("Invalid CSRF token. Photo upload failed.");
     }
 
+    // Get uploaded file information
     $fileInfo = $_FILES['fileInput'];
 
+    // Check file size limit (2MB maximum)
     if ($fileInfo['size'] > 2 * 1024 * 1024) {
-        echo "Error: Image must be 2MB or less.";
+        // File too large, set error message
+        $error_message = "❌ Error: Image must be 2MB or less.";
     } else {
+        // Initialize file info resource to check MIME type
         $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $mime  = $finfo->file($fileInfo['tmp_name']);
+        
+        // Get actual MIME type of uploaded file
+        $mime = $finfo->file($fileInfo['tmp_name']);
+        
+        // Define whitelist of allowed image MIME types
         $allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 
+        // Check if uploaded file MIME type is in allowed list
         if (!in_array($mime, $allowed, true)) {
-            echo "Error: Invalid image type. Only JPG, PNG, GIF, and WEBP allowed.";
+            // MIME type not allowed, set error message
+            $error_message = "❌ Error: Invalid image type. Only JPG, PNG, GIF, and WEBP allowed.";
         } else {
+            // Read file content into memory
             $fileData = file_get_contents($fileInfo['tmp_name']);
+            
+            // Create data URI combining MIME type and base64 encoded image data
             $profile_picture_url = 'data:' . $mime . ';base64,' . base64_encode($fileData);
 
-            // Fix #1: Prepared statement for photo UPDATE
-            $stmt = $connect->prepare("UPDATE bus_owner SET profile_picture_url=? WHERE email=?");
-            $stmt->bind_param("ss", $profile_picture_url, $_SESSION['email']);
-            if (!$stmt->execute()) {
-                echo "Error updating profile photo: " . $connect->error;
+            // Prepare UPDATE statement to store image in database
+            $stmt = $connect->prepare("UPDATE bus_owner SET profile_picture_url=? WHERE owner_id=?");
+            
+            // Bind the image data (string) and user ID (integer) parameters
+            $stmt->bind_param("si", $profile_picture_url, $user_id);
+            
+            // Execute the update query
+            if ($stmt->execute()) {
+                // Photo update successful, set success message
+                $success_message = "✅ Profile photo updated successfully!";
+            } else {
+                // Update failed, set error message with database error details
+                $error_message = "❌ Error updating profile photo: " . $connect->error;
             }
+            
+            // Close prepared statement to free resources
             $stmt->close();
         }
     }
 }
+
 ?>
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>User Profile</title>
-<style>
-body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }
-.container {
-    max-width: 600px; margin: 50px auto; background-color: #fff;
-    padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1);
-}
-h1 { text-align: center; margin-bottom: 20px; font-size: 40px; }
-.profile-photo {
-    display: block; width: 190px; height: 190px; margin: 0 auto 20px;
-    border-radius: 50%; background-color: #ccc; overflow: hidden;
-}
-.profile-photo img { width: 100%; height: 100%; object-fit: cover; }
-.user-details { text-align: center; margin-bottom: 20px; font-size: 20px; }
-.user-details p { margin: 5px 0; }
-.btn-update {
-    display: block; width: 100%; padding: 10px; text-align: center;
-    background-color: #007bff; color: #fff; border: none; border-radius: 10px;
-    cursor: pointer; transition: background-color 0.3s; font-size: 15px;
-}
-.btn-update:hover { background-color: #0056b3; }
-nav { background-color: #333; color: #fff; padding: 10px; }
-nav img { width: 40px; float: left; display: inline-block; margin: auto; }
-.taskbar { list-style-type: none; text-align: center; margin-top: 10px; }
-.taskbar li { display: inline; margin-right: 20px; }
-.taskbar li a { text-decoration: none; color: #fff; }
-table, th, td { border: 1px solid black; border-collapse: collapse; padding: 8px; }
-th { background-color: lightgrey; }
-</style>
-</head>
-<body>
+<!-- Include shared navigation bar component -->
+<?php include "includes/nav.php"; ?>
 
-<h1>RegE</h1>
-<nav>
-    <img src="logo.png" alt="Logo">
-    <ul class="taskbar">
-        <li><a href="Home.php">Home</a></li>
-        <li><a href="business-registration.php">Register Business</a></li>
-        <li><a href="login.php">Login</a></li>
-        <li><a href="contact.php">Contact</a></li>
-        <li><a href="profile.php">Profile</a></li>
-        <li style="float: right;"><a href="logout.php">Logout</a></li>
-    </ul>
-</nav>
-
+<!-- Main container for profile content -->
 <div class="container">
-    <h1>User Profile</h1>
-
-    <div class="profile-photo" id="profilePhotoContainer">
-        <img id="profilePhoto" src="<?= htmlspecialchars($profile_picture_url ?: 'placeholder.png') ?>" alt="Profile photo">
-    </div>
-
-    <div class="user-details">
-        <p><strong>Name:</strong> <?= htmlspecialchars($first_name) ?></p>
-        <p><strong>Email:</strong> <?= htmlspecialchars($email) ?></p>
-        <p><strong>Phone:</strong> <?= htmlspecialchars($phone_no) ?></p>
-    </div>
-
-    <div style="text-align:center; margin-bottom:10px;">
-        <a href="update-user info.php?owner_id=<?= (int)$owner_id ?>">
-            <button style="padding:7px;">Edit</button>
+    
+    <!-- Page heading -->
+    <h1>👤 Profile Settings</h1>
+    
+    <!-- Success message if profile was updated -->
+    <?php if (!empty($success_message)): ?>
+        <!-- Display success message in green alert box -->
+        <div class="success">
+            <?php echo $success_message; ?>
+        </div>
+    <?php endif; ?>
+    
+    <!-- Error message if something went wrong -->
+    <?php if (!empty($error_message)): ?>
+        <!-- Display error message in red alert box -->
+        <div class="error">
+            <?php echo $error_message; ?>
+        </div>
+    <?php endif; ?>
+    
+    <!-- Profile information section -->
+    <div class="card">
+        <!-- Section heading -->
+        <h2>Account Information</h2>
+        
+        <!-- Profile photo section -->
+        <div style="text-align: center; margin-bottom: 20px;">
+            <!-- Profile photo container with circular styling -->
+            <div style="width: 150px; height: 150px; border-radius: 50%; margin: 0 auto 15px; background-color: #f0f0f0; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 3px solid #ddd;">
+                <!-- Profile image: Show uploaded photo or placeholder -->
+                <img id="profilePhoto" 
+                     src="<?php echo !empty($profile_picture_url) ? htmlspecialchars($profile_picture_url) : 'placeholder.png'; ?>" 
+                     alt="Profile photo"
+                     style="width: 100%; height: 100%; object-fit: cover;">
+            </div>
+            
+            <!-- Photo upload form section -->
+            <form method="post" enctype="multipart/form-data">
+                <!-- Hidden CSRF token for form security -->
+                <input type="hidden" 
+                       name="csrf" 
+                       value="<?php echo htmlspecialchars($_SESSION['csrf']); ?>">
+                
+                <!-- Hidden file input: Triggered by button click -->
+                <input type="file" 
+                       id="fileInput" 
+                       name="fileInput" 
+                       style="display:none;" 
+                       accept="image/*"
+                       onchange="document.querySelector('form').submit();">
+                
+                <!-- Button to trigger file selection dialog -->
+                <button type="button" 
+                        class="btn" 
+                        onclick="document.getElementById('fileInput').click();"
+                        style="margin-bottom: 10px;">
+                    🖼️ Change Photo
+                </button>
+            </form>
+        </div>
+        
+        <!-- User information display -->
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+            <!-- First name display -->
+            <p style="margin: 8px 0;">
+                <strong>First Name:</strong> 
+                <span><?php echo htmlspecialchars($first_name); ?></span>
+            </p>
+            
+            <!-- Last name display -->
+            <p style="margin: 8px 0;">
+                <strong>Last Name:</strong> 
+                <span><?php echo htmlspecialchars($last_name); ?></span>
+            </p>
+            
+            <!-- Email address display -->
+            <p style="margin: 8px 0;">
+                <strong>Email:</strong> 
+                <span><?php echo htmlspecialchars($email); ?></span>
+            </p>
+            
+            <!-- Phone number display -->
+            <p style="margin: 8px 0;">
+                <strong>Phone:</strong> 
+                <span><?php echo htmlspecialchars($phone_no); ?></span>
+            </p>
+        </div>
+        
+        <!-- Edit profile button -->
+        <a href="update-user%20info.php?owner_id=<?php echo (int)$owner_id; ?>" 
+           class="btn" 
+           style="background-color: #28a745; text-decoration: none; display: inline-block;">
+            ✏️ Edit Account Information
         </a>
     </div>
-
-    <!-- Fix #5: Photo upload form includes CSRF token -->
-    <form method="post" enctype="multipart/form-data">
-        <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION['csrf']) ?>">
-        <input type="file" id="fileInput" name="fileInput" style="display:none;" accept="image/*">
-        <button type="button" class="btn-update" onclick="document.getElementById('fileInput').click();">
-            Upload Photo
-        </button>
-        <input type="submit" value="Save Photo" class="btn-update" style="margin-top:8px;">
-    </form>
+    
+    <!-- Quick actions section -->
+    <div class="card">
+        <!-- Section heading -->
+        <h2>Quick Actions</h2>
+        
+        <!-- Buttons for common user actions -->
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            
+            <!-- Dashboard link: View all companies -->
+            <a href="dashboard.php" 
+               class="btn" 
+               style="background-color: #17a2b8; text-decoration: none;">
+                📊 Back to Dashboard
+            </a>
+            
+            <!-- Register business link: Add new company -->
+            <a href="business-registration.php" 
+               class="btn" 
+               style="background-color: #28a745; text-decoration: none;">
+                ➕ Register New Business
+            </a>
+            
+            <!-- Logout link: End user session -->
+            <a href="logout.php" 
+               class="btn btn-danger" 
+               style="text-decoration: none;">
+                🚪 Logout
+            </a>
+        </div>
+    </div>
+    
+    <!-- Account management section -->
+    <div class="card">
+        <!-- Section heading -->
+        <h2>Account Management</h2>
+        
+        <!-- Account options -->
+        <div style="background-color: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107;">
+            <p style="margin: 10px 0;">
+                <strong>⚙️ Future Features:</strong>
+            </p>
+            <ul style="margin: 10px 0; padding-left: 20px;">
+                <!-- Placeholder for password change feature -->
+                <li>Change Password (Coming Soon)</li>
+                <!-- Placeholder for two-factor authentication -->
+                <li>Two-Factor Authentication (Coming Soon)</li>
+                <!-- Placeholder for activity log -->
+                <li>Activity Log (Coming Soon)</li>
+            </ul>
+        </div>
+    </div>
+    
 </div>
 
-<h1>COMPANIES REGISTERED</h1>
-<div style="padding: 20px; overflow-x: auto;">
-    <table style="width:100%;">
-        <tr>
-            <th>COMPANY NAME</th>
-            <th>OWNER</th>
-            <th>DESCRIPTION</th>
-            <th>STREET</th>
-            <th>CITY</th>
-            <th>POSTAL</th>
-            <th>WEBSITE</th>
-            <th colspan="2">ACTIONS</th>
-        </tr>
-
-        <?php
-        // Fix #1: No raw interpolation — plain SELECT with no user input is safe here
-        $result = $connect->query("SELECT * FROM Company_Information");
-        if ($result) {
-            while ($row = $result->fetch_assoc()) {
-                $cID   = (int) $row['companyID'];
-                $cName = htmlspecialchars($row['companyName']);
-                $cOwn  = htmlspecialchars($row['owner']);
-                $cDesc = htmlspecialchars($row['companyDescription']);
-                $cStr  = htmlspecialchars($row['streetAddress']);
-                $cCity = htmlspecialchars($row['city']);
-                $cPost = htmlspecialchars($row['postalCode']);
-                $cWeb  = htmlspecialchars($row['website']);
-                $csrf  = htmlspecialchars($_SESSION['csrf']);
-
-                echo "
-                <tr>
-                    <td>$cName</td>
-                    <td>$cOwn</td>
-                    <td>$cDesc</td>
-                    <td>$cStr</td>
-                    <td>$cCity</td>
-                    <td>$cPost</td>
-                    <td>$cWeb</td>
-                    <td>
-                        <!-- Fix #5: Delete is now a POST form with CSRF — not a bare GET link -->
-                        <form method='post' action='delete.php'
-                              onsubmit=\"return confirm('Delete this company?')\">
-                            <input type='hidden' name='csrf' value='$csrf'>
-                            <input type='hidden' name='companyID' value='$cID'>
-                            <button type='submit'>Delete</button>
-                        </form>
-                    </td>
-                    <td>
-                        <a href='update.php?companyID=$cID'>
-                            <button>Update</button>
-                        </a>
-                    </td>
-                </tr>";
-            }
-        }
-        ?>
-    </table>
-</div>
-
+<!-- JavaScript: Update profile photo preview when user selects image -->
 <script>
-const fileInput    = document.getElementById('fileInput');
-const profilePhoto = document.getElementById('profilePhoto');
+    // Get file input element reference
+    const fileInput = document.getElementById('fileInput');
+    // Get profile photo image element reference
+    const profilePhoto = document.getElementById('profilePhoto');
 
-fileInput.addEventListener('change', function () {
-    const file = this.files[0];
-    if (file) {
-        const reader = new FileReader();
-        reader.onload = function (event) {
-            profilePhoto.src = event.target.result;
-        };
-        reader.readAsDataURL(file);
-    }
-});
+    // Listen for file selection change event
+    fileInput.addEventListener('change', function () {
+        // Check if files were selected by user
+        if (this.files && this.files[0]) {
+            // Create new FileReader instance to read file content
+            const reader = new FileReader();
+            
+            // Event handler when file is successfully loaded
+            reader.onload = function (event) {
+                // Update image source to show preview of selected file
+                profilePhoto.src = event.target.result;
+            };
+            
+            // Read the selected file as a data URL (base64 encoded string)
+            reader.readAsDataURL(this.files[0]);
+        }
+    });
 </script>
 
-</body>
-</html>
+<!-- Include footer component with copyright and links -->
+<?php include "includes/footer.php"; ?>
