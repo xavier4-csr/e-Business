@@ -2,6 +2,11 @@
 session_start();
 include 'connectdb.php';
 
+if (!isset($_SESSION['id'])) {
+    header('location:login.php');
+    exit();
+}
+
 // Fix #5: Generate CSRF token
 if (empty($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(32));

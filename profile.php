@@ -1,11 +1,14 @@
 <?php
+// Session hardening + auth guard
+ini_set('session.cookie_httponly', 1);
+ini_set('session.use_strict_mode', 1);
+if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+    ini_set('session.cookie_secure', 1);
+}
+ini_set('session.cookie_samesite', 'Strict');
+
 session_start();
 include "connectdb.php";
-
-// Fix #5: Generate CSRF token
-if (empty($_SESSION['csrf'])) {
-    $_SESSION['csrf'] = bin2hex(random_bytes(32));
-}
 
 if (!isset($_SESSION['email'])) {
     header("location:login.php");
@@ -40,18 +43,30 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['fileInput'])
         die("Invalid CSRF token.");
     }
 
-    $file        = $_FILES['fileInput']['tmp_name'];
-    $fileContent = addslashes(file_get_contents($file));
+    $fileInfo = $_FILES['fileInput'];
 
-    // Fix #1: Prepared statement for photo UPDATE
-    $stmt = $connect->prepare("UPDATE bus_owner SET profile_picture_url=? WHERE email=?");
-    $stmt->bind_param("ss", $fileContent, $_SESSION['email']);
-    if ($stmt->execute()) {
-        $profile_picture_url = $fileContent;
+    if ($fileInfo['size'] > 2 * 1024 * 1024) {
+        echo "Error: Image must be 2MB or less.";
     } else {
-        echo "Error updating profile photo: " . $connect->error;
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $mime  = $finfo->file($fileInfo['tmp_name']);
+        $allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+        if (!in_array($mime, $allowed, true)) {
+            echo "Error: Invalid image type. Only JPG, PNG, GIF, and WEBP allowed.";
+        } else {
+            $fileData = file_get_contents($fileInfo['tmp_name']);
+            $profile_picture_url = 'data:' . $mime . ';base64,' . base64_encode($fileData);
+
+            // Fix #1: Prepared statement for photo UPDATE
+            $stmt = $connect->prepare("UPDATE bus_owner SET profile_picture_url=? WHERE email=?");
+            $stmt->bind_param("ss", $profile_picture_url, $_SESSION['email']);
+            if (!$stmt->execute()) {
+                echo "Error updating profile photo: " . $connect->error;
+            }
+            $stmt->close();
+        }
     }
-    $stmt->close();
 }
 ?>
 
@@ -109,7 +124,7 @@ th { background-color: lightgrey; }
     <h1>User Profile</h1>
 
     <div class="profile-photo" id="profilePhotoContainer">
-        <img id="profilePhoto" src="placeholder.png">
+        <img id="profilePhoto" src="<?= htmlspecialchars($profile_picture_url ?: 'placeholder.png') ?>" alt="Profile photo">
     </div>
 
     <div class="user-details">

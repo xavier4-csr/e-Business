@@ -2,12 +2,21 @@
 session_start();
 include 'connectdb.php';
 
+if (!isset($_SESSION['id'])) {
+    header('location:login.php');
+    exit();
+}
+
 // Fix #5: Generate CSRF token
 if (empty($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(32));
 }
 
-$owner_id = (int) $_GET['owner_id'];
+$owner_id = isset($_GET['owner_id']) ? (int) $_GET['owner_id'] : 0;
+if ($owner_id <= 0 || $owner_id !== (int)$_SESSION['id']) {
+    header('location:profile.php');
+    exit();
+}
 
 // Fix #1: Prepared statement for SELECT
 $stmt = $connect->prepare("SELECT * FROM bus_owner WHERE owner_id = ?");

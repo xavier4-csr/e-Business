@@ -16,15 +16,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         die("Invalid CSRF token. Please go back and try again.");
     }
 
-    $first_name = $_POST['first_name'];
-    $last_name  = $_POST['last_name'];
-    $email      = $_POST['email'];
-    $password   = $_POST['password'];
-    $phone_no   = $_POST['phone_no'];
+    $first_name      = trim($_POST['first_name'] ?? '');
+    $last_name       = trim($_POST['last_name'] ?? '');
+    $email           = filter_var(trim($_POST['email'] ?? ''), FILTER_VALIDATE_EMAIL);
+    $password        = $_POST['password'] ?? '';
+    $confirmPassword = $_POST['confirmPassword'] ?? '';
+    $phone_no        = trim($_POST['phone_no'] ?? '');
 
-    $password_hash = password_hash($password, PASSWORD_DEFAULT);
+    if (!$email || !$first_name || !$last_name || !$password || !$confirmPassword || $password !== $confirmPassword) {
+        $unsuccess = 1;
+    } else {
+        $password_hash = password_hash($password, PASSWORD_DEFAULT);
 
-    // Fix #1: Prepared statement to check for existing email
+        // Fix #1: Prepared statement to check for existing email
     $stmt = $connect->prepare("SELECT owner_id FROM bus_owner WHERE email = ?");
     $stmt->bind_param("s", $email);
     $stmt->execute();
@@ -50,6 +54,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
     }
     $stmt->close();
+}
 }
 ?>
 

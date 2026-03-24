@@ -1,9 +1,15 @@
 <?php
-// Fix #4: session_start() must be at the very top, before any output
+// Session hardening
+ini_set('session.cookie_httponly', 1);
+ini_set('session.use_strict_mode', 1);
+if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+    ini_set('session.cookie_secure', 1);
+}
+ini_set('session.cookie_samesite', 'Strict');
+
 session_start();
 include "connectdb.php";
 
-// Fix #5: Generate CSRF token on page load
 if (empty($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(32));
 }
@@ -16,32 +22,38 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         die("Invalid CSRF token. Please go back and try again.");
     }
 
-    $email    = $_POST['email'];
-    $password = $_POST['password'];
+    $email    = filter_input(INPUT_POST, 'email', FILTER_VALIDATE_EMAIL);
+    $password = $_POST['password'] ?? '';
 
-    // Fix #1: Prepared statement — no more string interpolation
-    $stmt = $connect->prepare("SELECT * FROM bus_owner WHERE email = ?");
-    $stmt->bind_param("s", $email);
-    $stmt->execute();
-    $result = $stmt->get_result();
+    if (!$email || empty($password)) {
+        $unsuccess = 1;
+    } else {
+        // Fix #1: Prepared statement — no more string interpolation
+        $stmt = $connect->prepare("SELECT * FROM bus_owner WHERE email = ?");
+        $stmt->bind_param("s", $email);
+        $stmt->execute();
+        $result = $stmt->get_result();
 
-    if ($result && $result->num_rows > 0) {
-        $bus_owner     = $result->fetch_assoc();
-        $password_hash = $bus_owner['password'];
+        if ($result && $result->num_rows > 0) {
+            $bus_owner     = $result->fetch_assoc();
+            $password_hash = $bus_owner['password'];
 
-        if (password_verify($password, $password_hash)) {
-            $_SESSION['email'] = $email;
-            $_SESSION['id']    = $bus_owner['id'];
-            header("location:profile.php");
-            exit();
+            if (password_verify($password, $password_hash)) {
+                session_regenerate_id(true);
+                $_SESSION['email'] = $email;
+                $_SESSION['id']    = $bus_owner['id'];
+                header("location:profile.php");
+                exit();
+            } else {
+                $unsuccess = 1;
+            }
         } else {
             $unsuccess = 1;
         }
-    } else {
-        $unsuccess = 1;
+        $stmt->close();
     }
-    $stmt->close();
 }
+
 ?>
 
 <!DOCTYPE html>

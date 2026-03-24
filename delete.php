@@ -2,6 +2,11 @@
 session_start();
 include "connectdb.php";
 
+if (!isset($_SESSION['id'])) {
+    header('location:login.php');
+    exit();
+}
+
 // Fix #5: Verify CSRF token — delete must be a POST action, not a bare GET link
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     // Reject direct GET requests; deletion must come from a form submission
